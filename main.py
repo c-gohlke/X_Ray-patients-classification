@@ -1,90 +1,79 @@
 import pandas as pd
-from sklearn.linear_model import LogisticRegression
-import numpy as np 
+import os
+import tensorflow as tf
+from tensorflow.keras.layers import Conv2D, MaxPooling2D, Dropout, Flatten, Dense, Activation, BatchNormalization
+from tensorflow.keras.preprocessing.image import ImageDataGenerator
 from sklearn.model_selection import train_test_split
-from sklearn.datasets import load_digits
-from sklearn import metrics
-from skimage import color
-import imageio
-import glob
 import cv2
+import numpy as np
 import matplotlib.pyplot as plt
 
-############ EXAMPLE PART
+tf.autograph.set_verbosity(0) #higher number, more logs
 
-digits = load_digits()
-X_train, X_test, y_train, y_test = train_test_split(digits.data, digits.target, test_size=0.25, random_state=0)
+def load_data():
+    df = pd.read_csv('MURA-v1.1/train_labeled_studies.csv')
+    df['DIAGNOSIS'] = df['DIAGNOSIS'].astype(str)
 
-# # Print to show there are 1797 images (8 by 8 images for a dimensionality of 64)
-# print("Image Data Shape" , digits.data.shape)
-# # Print to show there are 1797 labels (integers from 0–9)
-# print("Label Data Shape", digits.target.shape)
+    X_y = [[]]
+    for i in range(len(df)):
+        dirList = os.listdir(df["PATH"][i])
+        for dir in dirList:
+            X_y.append([df["PATH"][i] + dir, df["DIAGNOSIS"][i]])
+    X_y.pop(0) #X_y's first attribute initialized to be [None,None]
 
-# logreg = LogisticRegression(C=1e20, solver='liblinear', max_iter=200, multi_class='auto')
-# logreg.fit(X_train, y_train)
-# score = logreg.score(X_test, y_test)
-# print(score)
+    return pd.DataFrame(X_y, columns = ["PATH", "DIAGNOSIS"])
 
-########### MURA PART
+def create_model():
+    model = tf.keras.models.Sequential()
 
-def load_images():
-     print("Loading the images")
+    model.add(Conv2D(32, (5,5), activation='relu', input_shape=(512, 512, 3)))
+    model.add(MaxPooling2D(pool_size=(2, 2)))
+    model.add(Conv2D(64, (5,5), activation='relu'))
+    model.add(MaxPooling2D(pool_size=(2, 2)))
+    model.add(Conv2D(128, (5,5), activation='relu'))
+    model.add(MaxPooling2D(pool_size=(2, 2)))
+    model.add(Conv2D(256, (5,5), activation='relu'))
+    model.add(MaxPooling2D(pool_size=(2, 2)))
+    model.add(Conv2D(256, (5,5), activation='relu'))
+    model.add(MaxPooling2D(pool_size=(2, 2)))
+    model.add(Flatten())
+    model.add(Dense(512, activation='relu'))
+    model.add(Dense(2, activation='softmax')) # 2 because we have 2 classes (healthy vs unhealthy)
+    model.compile(loss='categorical_crossentropy', optimizer='adam', metrics=['accuracy'])
 
-     df = pd.read_csv('MURA-v1.1/train_labeled_studies2.csv')
-     paths = df["PATH"]
+    return model
 
-     process = len(paths) #replaced because of memory errors
+data = load_data()
 
-     #make np array directly (faster)
-     # X = np.zeros((len(paths), 262144))
-     X = np.zeros((process, 262144))
-     # y = np.zeros(len(paths))
-     y = np.zeros(process)
+#image values are initially from 0 to 255
+datagen = ImageDataGenerator(rescale=1./255)
+train_df, test_df = train_test_split(data,test_size = 0.2)
+traingenerator = datagen.flow_from_dataframe( train_df , directory = None, x_col = 'PATH' , y_col = 'DIAGNOSIS', target_size = (512,512) ,class_mode='categorical', batch_size = 32)
+testgenerator = datagen.flow_from_dataframe( test_df , directory = None, x_col = 'PATH' , y_col = 'DIAGNOSIS', target_size = (512,512) ,class_mode='categorical', batch_size = 32)
 
-     dim = (512, 512) #original is 512*512
-     #for each path in the .csv
-     # for i in range (len(paths)):
-     for i in range (process):
-          if("XR_HAND" in paths[i]):#only load pics with hands for now
-               for im_path in glob.glob(paths[i]+"*.png"):
-                    im = color.rgb2gray(imageio.imread(im_path, as_gray=True))
-                    res = cv2.resize(im, dim)
-                    x = np.array(res)
-                    # x = x.reshape(-1)
+model = create_model()
+history = model.fit_generator(
+    traingenerator, 
+    epochs=5,
+    validation_data = testgenerator,
+    validation_steps= len(testgenerator),
+    steps_per_epoch = len(traingenerator)
+)
 
-                    X[i] = x
-                    y[i] = (df["DIAGNOSIS"][i])
-     
-     print("images loaded")
-     return X,y
+#Loss
+plt.plot(history.history['loss']) 
+plt.plot(history.history['val_loss']) 
+plt.title('Model loss') 
+plt.ylabel('Loss') 
+plt.xlabel('Epoch') 
+plt.legend(['Train', 'Test'], loc='upper left') 
+plt.show()
 
-def display_one(a):
-    plt.imshow(a)
-    plt.show()
-
-images,labels = load_images()
-X_train, X_test, y_train, y_test = train_test_split(images, labels, test_size=0.25, random_state=0)
-
-unique, counts = np.unique(y_train, return_counts=True)
-print("y_train distribution is", unique, counts)
-
-print("Image Data Shape" , images.shape)
-print("Label Data Shape", labels.shape)
-
-logreg = LogisticRegression(C=1e10, solver='lbfgs')
-logreg.fit(X_train, y_train)
-
-print("model done training")
-
-y_hat = logreg.predict(X_train)
-train_acc = metrics.accuracy_score(y_hat, y_train)
-print("training accuracy is ", train_acc)
-#logreg.predict_proba(X_train)
-y_hat_test = logreg.predict(X_test)
-test_acc = metrics.accuracy_score(y_hat_test, y_test)
-print("testing accuracy is ", test_acc)
-
-unique, counts = np.unique(y_hat_test, return_counts=True)
-print("y_hat_test distribution is ", unique, counts)
-unique, counts = np.unique(y_test, return_counts=True)
-print("y_test distribution is ", unique, counts)
+#Accuracy
+plt.plot(history.history['acc'])
+plt.plot(history.history['val_acc'])
+plt.title('Model accuracy')
+plt.ylabel('Accuracy')
+plt.xlabel('Epoch')
+plt.legend(['Train', 'Test'], loc='upper left')
+plt.show()
